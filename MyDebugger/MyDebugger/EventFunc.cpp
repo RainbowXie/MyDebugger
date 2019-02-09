@@ -102,6 +102,17 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
     LPEXCEPTION_DEBUG_INFO pExceptionDebugInfo = &pDe->u.Exception;
     PEXCEPTION_RECORD pExceptionRecord = &pExceptionDebugInfo->ExceptionRecord;
 
+    HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pDe->dwThreadId);
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+
+    // 判断是否由硬件断点引发的 singlestep 
+    int ValidSeat = ctx.Dr6 & 0xf;
+    if (0 == ValidSeat)
+    {
+    }
+
     // 找到刚刚走过的断点，并重设断点
     LPSOFT_BP currentBP = g_pData->getCurrentSoftBP();
     if (!currentBP)
