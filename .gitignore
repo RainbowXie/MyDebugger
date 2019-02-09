@@ -240,3 +240,12 @@ ModelManifest.xml
 
 # FAKE - F# Make
 .fake/
+/Cr31Dbg
+/MyDebugger/Test
+/CR31_谢雨松_20190207.zip
+/CR31_谢雨松_20190205.zip
+/CR31_谢雨松_20190204.zip
+/时间分配表.xls
+/工作日志.doc
+/MyDebugger/MyDebugger/TestDbg.exe
+/MyDebugger/MyDebugger/calc.exe
