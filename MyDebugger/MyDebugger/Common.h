@@ -4,6 +4,7 @@
 #include <iostream>
 #include <map>
 #include <queue>
+#include <vector>
 #include <Shlwapi.h>
 
 #pragma comment(lib, "Shlwapi.lib")
@@ -27,6 +28,9 @@
  //硬件访问、写入断点会断在访问、写入指令的下一条指令
 //触发后会进入 EXCEPTION_SINGLE_STEP 异常，然后继续执行进程，不会再来，不需要断步配合来过访问、写入断点
 
+#define EXECUTE_HARDWARE_LEN 1
+#define HARDWARE_SEAT_COUNT 4
+#define  BH_COMMAND_LENGTH 4
 //////////////////////////////////////////////////////////////////////////
 //
 //
@@ -48,13 +52,22 @@ enum eType
 //////////////////////////////////////////////////////////////////////////
 typedef struct tagBreakPoint
 {
-    int nSequenceNumber;     // 序号
+    int m_nSequenceNumber;     // 序号
     eType m_type;                   // 断点类型
     DWORD m_bpAddr;     // 断点地址
     char m_oldCode;              // 断点原来的指令
     int m_bActive;         // 是否启用断点
     BOOL m_bCurrentBP; // 是否是当前的断点，用于重设断点
 }SOFT_BP, *LPSOFT_BP;
+
+typedef struct tagHardBreakPoint
+{
+    int m_nSequenceNumber;     // 序号
+    eType m_type;                   // 断点类型
+    DWORD m_bpAddr;     // 断点地址
+    DWORD m_dwLen;      // 断点长度
+    BOOL m_bCurrentBP; // 是否是当前的断点，用于重设断点
+}HARD_BP, *LPHARD_BP;
 
 //////////////////////////////////////////////////////////////////////////
 // DR7 的标志
@@ -81,6 +94,17 @@ typedef struct  tagDR7
     int LEN3 : 2;
 }DR7, *PDR7;
 
+typedef struct tagDR6
+{
+    int B0 : 1;
+    int B1 : 1;
+    int B2 : 1;
+    int B3 : 1;
+    int unused0 : 10;
+    int BS : 1;
+    int unused1 : 17;
+}DR6, *PDR6;
+
 //////////////////////////////////////////////////////////////////////////
 //保存所有用得到的数据
 //
@@ -90,7 +114,8 @@ class CDebugData
 public:
     CDebugData()
     {
-        it = m_SoftBPMap.begin();
+        m_softIt = m_SoftBPMap.end();
+        m_HardIt = m_HardBPVector.end();
     }
     ~CDebugData()
     {
@@ -109,18 +134,56 @@ public:
     void addBP(LPSOFT_BP softBP)
     {
         m_iCount++;
-        softBP->nSequenceNumber = m_iCount;
+        softBP->m_nSequenceNumber = m_iCount;
         softBP->m_bCurrentBP = FALSE;
         m_SoftBPMap.insert(m_SoftBPMap.end(), std::make_pair(softBP->m_bpAddr, softBP));
         return;
     }
 
+    // 添加硬件断点
+    void addBP(LPHARD_BP hardBP)
+    {
+        m_HardBPVector.push_back(hardBP);
+        //m_HardBPVector.insert(m_HardBPVector.end(), std::make_pair(hardBP->m_bpAddr, hardBP));
+        return;
+    }
+
+    // 断点存在返回 TRUE，不存在返回 FALSE
+    BOOL isHardBPExist(DWORD addr, DWORD dwLen, eType BPType)
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if (((*Iter)->m_bpAddr <= addr && addr < (*Iter)->m_bpAddr + (*Iter)->m_dwLen)
+                &&(*Iter)->m_type == BPType)
+            {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+    // 断点存在返回 TRUE，不存在返回 FALSE
+    BOOL isHardBPExist(DWORD dwSNumber)
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_nSequenceNumber == dwSNumber)
+            {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+
     // 断点存在返回 TRUE，不存在返回 FALSE
     BOOL isSoftBPExist(DWORD addr)
     {
-        auto it = m_SoftBPMap.find(addr);
+        auto m_softIt = m_SoftBPMap.find(addr);
 
-        if (it == m_SoftBPMap.end())
+        if (m_softIt == m_SoftBPMap.end())
         {
             return FALSE;
         }
@@ -130,59 +193,146 @@ public:
 
     LPSOFT_BP getSoftBP(DWORD addr)
     {
-        std::map<DWORD, LPSOFT_BP>::iterator it;
-        it = m_SoftBPMap.find(addr);
-        return it->second;
+        std::map<DWORD, LPSOFT_BP>::iterator m_softIt;
+        m_softIt = m_SoftBPMap.find(addr);
+        return m_softIt->second;
+    }
+
+    LPHARD_BP getHardBP(DWORD SNumber)
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_nSequenceNumber == SNumber)
+            {
+
+                return *Iter;
+            }
+        }
+
+        return NULL;
     }
 
     LPSOFT_BP getFirstSoftBP()
     {
-        it = m_SoftBPMap.begin();
-        return it->second;
+        m_softIt = m_SoftBPMap.begin();
+        if (m_softIt != m_SoftBPMap.end())
+        {
+            return m_softIt->second;
+        }
+
+        return NULL;
     }
     LPSOFT_BP getNextSoftBP()
     {
-        it++;
-        if (m_SoftBPMap.end() == it)
+        m_softIt++;
+        if (m_SoftBPMap.end() == m_softIt)
         {
             return NULL;
         }
-        return it->second;
+        return m_softIt->second;
+    }
+
+    LPHARD_BP getFirstHardBP()
+    {
+        m_HardIt = m_HardBPVector.begin();
+        if (m_HardIt != m_HardBPVector.end())
+        {
+            return (*m_HardIt);
+        }
+        return NULL;
+    }
+    LPHARD_BP getNextHardBP()
+    {
+        m_HardIt++;
+        if (m_HardBPVector.end() == m_HardIt)
+        {
+            return NULL;
+        }
+        return *m_HardIt;
     }
 
     // 从链表中删除，并不是取消断点
     void deleteBP(DWORD addr)
     {
-        auto it = m_SoftBPMap.find(addr);
+        auto m_softIt = m_SoftBPMap.find(addr);
 
-        m_SoftBPMap.erase(it);
+        delete m_softIt->second;
+        m_SoftBPMap.erase(m_softIt);
 
         return;
     }
 
+    // 从数组中删除断点
+    // TRUE 删除成功，FALSE 删除失败
+    BOOL deleteHardBP(DWORD SNumber)
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_nSequenceNumber == SNumber)
+            {
+                delete (*Iter);
+                m_HardBPVector.erase(Iter);
+                return TRUE;
+            }
+        }
+
+
+        return FALSE;
+    }
+
     LPSOFT_BP getCurrentSoftBP()
     {
-        auto it = m_SoftBPMap.begin();
-        for (; it != m_SoftBPMap.end();it++)
+        auto m_softIt = m_SoftBPMap.begin();
+        for (; m_softIt != m_SoftBPMap.end();m_softIt++)
         {
-            if (TRUE == it->second->m_bCurrentBP)
+            if (TRUE == m_softIt->second->m_bCurrentBP)
             {
-                it->second->m_bCurrentBP = FALSE;
-                return it->second;
+                m_softIt->second->m_bCurrentBP = FALSE;
+                return m_softIt->second;
             }     
         }
         return NULL;
     }
 
     // 硬件断点
-    
+    void setCurrentHardwareBP(DWORD currentHardwareBP)
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_bpAddr == currentHardwareBP)
+            {
+                (*Iter)->m_bCurrentBP = TRUE;
+                return;
+            }
+        }
+    }
+
+    LPHARD_BP getCurrentHardwareBP()
+    {
+        std::vector<LPHARD_BP>::iterator Iter;
+        for (Iter = m_HardBPVector.begin(); Iter != m_HardBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_bCurrentBP == TRUE)
+            {
+                (*Iter)->m_bCurrentBP = FALSE;
+                return (*Iter);
+            }
+        }
+        return NULL;
+    }
 private:
     // 软件断点
-    int m_iCount;
+    int m_iCount = 0;
     std::map<DWORD, LPSOFT_BP> m_SoftBPMap;     // 地址，软件断点数据
-    std::map<DWORD, LPSOFT_BP>::iterator it;              
+    std::map<DWORD, LPSOFT_BP>::iterator m_softIt;              
     BOOL m_bIsSystemBP = TRUE;
 
+    //
+    std::vector<LPHARD_BP> m_HardBPVector;     // 地址，软件断点数据
+    std::vector<LPHARD_BP>::iterator m_HardIt;
 
 };
 
@@ -203,7 +353,8 @@ BOOL setBreakPoint(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode);
 BOOL setSoftBP(HANDLE hProcess, eType BPType, DWORD addr);
 
 DWORD getVacancySeat(LPCONTEXT pCtx);
-BOOL setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType);
+DWORD setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType);
+BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber);
 
 BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 std::queue<std::string>* getUserInput();
@@ -213,6 +364,6 @@ void doBP(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBPL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBPC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBH(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-
-
+void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBHC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 

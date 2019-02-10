@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "Common.h"
 
-#define  BH_COMMAND_LENGTH 4
+
 
 //////////////////////////////////////////////////////////////////////////
 // 获取用户输入
@@ -35,7 +35,7 @@ std::queue<std::string>* getUserInput()
 //////////////////////////////////////////////////////////////////////////
 BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
 {
-    BOOL bRet = FALSE;
+    BOOL bRet = TRUE;
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
     HANDLE hThread = OpenThread(PROCESS_ALL_ACCESS, FALSE, pDe->dwThreadId);
 
@@ -65,6 +65,16 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
     else if (!qu->front().compare("bh"))
     {
         doBH(hThread, pDe, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("bhl"))
+    {
+        doBHL(hProcess, pDe, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("bhc"))
+    {
+        doBHC(hThread, pDe, qu);
         bRet = TRUE;
     }
 
@@ -123,7 +133,7 @@ void doBPL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
 
     while (NULL != bp)
     {
-        printf("%d 0x%08x\r\n", bp->nSequenceNumber, bp->m_bpAddr);
+        printf("%d 0x%08x\r\n", bp->m_nSequenceNumber, bp->m_bpAddr);
         bp = g_pData->getNextSoftBP();
     } 
 
@@ -146,7 +156,7 @@ void doBPC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         LPSOFT_BP bp = g_pData->getFirstSoftBP();
         while (NULL != bp)
         {
-            if (iSequenceNumber == bp->nSequenceNumber)
+            if (iSequenceNumber == bp->m_nSequenceNumber)
             {
                 // 恢复断点处指令，并从链表中删除断点
                 restoreInstruction(hProcess, bp->m_bpAddr, &bp->m_oldCode);
@@ -219,9 +229,85 @@ void doBH(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         return;
     }
 
-    if (!setHardBP(hThread, dwAddr, dwLen, dwBPType))
+    if (g_pData->isHardBPExist(dwAddr, dwLen, dwBPType))
     {
-        showDebugerError(_T("Set hardware breakpoint fail."));
+        return;
+    }
+
+    DWORD iSNumber = setHardBP(hThread, dwAddr, dwLen, dwBPType);
+    if (-1 == iSNumber)
+    {
+        printf("Set hardware breakpoint fail.\r\n");
+        return;
+    }
+
+    LPHARD_BP hardBP = new HARD_BP;
+    hardBP->m_nSequenceNumber = iSNumber;
+    hardBP->m_bpAddr = dwAddr;
+    hardBP->m_type = dwBPType;
+    hardBP->m_bCurrentBP = FALSE;
+    hardBP->m_dwLen = dwLen;
+    g_pData->addBP(hardBP);
+
+    return;
+}
+
+void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+    LPHARD_BP bp = g_pData->getFirstHardBP();
+
+    while (NULL != bp)
+    {
+        char cType = { 0 };
+        switch (bp->m_type)
+        {
+        case 0:
+        {
+            cType = 'e';
+        }
+        break;
+        case 1:
+        {
+            cType = 'w';
+        }
+        break;
+        case 3:
+        {
+            cType = 'a';
+        }
+        break;
+        default:
+            break;
+        }
+
+        printf("%d 0x%08x %d %c\r\n", bp->m_nSequenceNumber, bp->m_bpAddr, bp->m_dwLen, cType);
+        bp = g_pData->getNextHardBP();
+    }
+
+    return;
+}
+
+void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+    qu->pop();
+    if (qu->empty())
+    {
+        // 如果后面没有地址则没卵用
+    }
+    else
+    {
+        int iSequenceNumber = 0;
+        sscanf(qu->front().c_str(), "%d", &iSequenceNumber);
+
+        if (FALSE == g_pData->isHardBPExist(iSequenceNumber))
+        {
+            printf("Breakpoint doesn't exist.\r\n");
+            return;
+        }
+
+        abortHardBP(hThread, iSequenceNumber);
+        g_pData->deleteHardBP(iSequenceNumber);
+
     }
     
     return;

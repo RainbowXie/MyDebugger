@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "Common.h"
 
-#define HARDWARE_SEAT_COUNT 4
+
 //////////////////////////////////////////////////////////////////////////
 // 设置断点
 // 返回值：成功返回 TRUE，失败返回 FALSE
@@ -94,7 +94,8 @@ BOOL restoreInstruction(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode)
 
 //////////////////////////////////////////////////////////////////////////
 // 单步异常
-//
+// 一般软件断点、硬件断点会到这来。
+// 
 //////////////////////////////////////////////////////////////////////////
 DWORD OnSingleStep(LPDEBUG_EVENT pDe)
 {
@@ -107,36 +108,87 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
     ctx.ContextFlags = CONTEXT_ALL;
     GetThreadContext(hThread, &ctx);
 
-    // 判断是否由硬件断点引发的 singlestep 
+    // 判断是否由硬件断点引发的 singlestep
+    PDR6 pDr6 = (PDR6)&ctx.Dr6;
     int ValidSeat = ctx.Dr6 & 0xf;
-    if (0 == ValidSeat)
+    if (0 != ValidSeat)
     {
-    }
+        // 把掩码位转换成序号
+        int iSNumber = 0;
+        while (ValidSeat = ValidSeat >> 1)
+        {
+            iSNumber++;
+        }
+        // 判断该 Dr 位的断点类型
+        int BPType = (eType)((ctx.Dr7 & (3 << (16 + iSNumber * 4))) >> (16 + iSNumber * 4));
 
-    // 找到刚刚走过的断点，并重设断点
-    LPSOFT_BP currentBP = g_pData->getCurrentSoftBP();
-    if (!currentBP)
-    {
+        // 如果是执行断点，设单步
+        if (EXECUTE_HARDWARE == BPType)
+        {
+            abortHardBP(hThread, iSNumber); //取消硬件执行断点
+
+            CONTEXT ctx;
+            ctx.ContextFlags = CONTEXT_ALL;
+            GetThreadContext(hThread, &ctx);
+            ctx.EFlags |= 0x100;       // 设置单步
+            ctx.Dr6 = 0;
+            SetThreadContext(hThread, &ctx);
+
+            // 设置要还原的硬件断点
+            g_pData->setCurrentHardwareBP(*(&ctx.Dr0 + iSNumber));
+        }
+        else
+        {
+
+        }
+        // 断点到达，获取用户输入
+        BOOL bRet = TRUE;
+        while (bRet)
+        {
+            bRet = analyzeInstruction(pDe, getUserInput());
+        }
+
         dwRet = DBG_CONTINUE;
         return dwRet;
     }
 
-    if (NORMAL_BREAKPOINT == currentBP->m_type)
+
+    // 说明是单步中断引发的，而不是硬件断点引发的
+    if (pDr6->BS)
     {
-        HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
-        if (NULL == hProcess)
+        // 找到刚刚走过的断点，并重设断点
+        LPSOFT_BP currentBP = g_pData->getCurrentSoftBP();
+
+        // 如果 currentBP 为 NULL，则说明是硬件执行断点。
+        if (currentBP)
         {
-            showDebugerError(_T("重设断点失败。"));
-            return dwRet;
+            HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
+            if (NULL == hProcess)
+            {
+                showDebugerError(_T("重设断点失败。"));
+                return dwRet;
+            }
+
+            // 将断点重设回去
+            if (!setBreakPoint(hProcess, currentBP->m_bpAddr, &currentBP->m_oldCode))
+            {
+                return dwRet;
+            }
+        }
+        else
+        {
+            // 恢复硬件执行断点
+            DWORD dwAddr = g_pData->getCurrentHardwareBP()->m_bpAddr;
+            if (NULL != dwAddr)
+            {
+                setHardBP(hThread, dwAddr, EXECUTE_HARDWARE_LEN, EXECUTE_HARDWARE);
+            }
         }
 
-        // 将断点重设回去
-        if (!setBreakPoint(hProcess, currentBP->m_bpAddr, &currentBP->m_oldCode))
-        {
-            return dwRet;
-        }
+
     }
-    
+
+
     dwRet = DBG_CONTINUE;
     return dwRet;
 }
@@ -214,9 +266,9 @@ DWORD OnBreakPoint(LPDEBUG_EVENT pDe)
 
 //////////////////////////////////////////////////////////////////////////
 // 设置硬件断点
-// 返回值：没有空位返回 FALSE
+// 返回值：没有空位返回 -1
 //////////////////////////////////////////////////////////////////////////
-BOOL setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType)
+DWORD setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType)
 {
     dwLen--;
 
@@ -232,7 +284,7 @@ BOOL setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType)
     iSNumber = getVacancySeat(&ctx);
     if (-1 == iSNumber)
     {
-        return FALSE;
+        return iSNumber;
     }
 
     LPDWORD pDr = &ctx.Dr0;
@@ -246,7 +298,7 @@ BOOL setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType)
 
     SetThreadContext(hThread, &ctx);
 
-    return TRUE;
+    return iSNumber;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -255,16 +307,51 @@ BOOL setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType)
 //////////////////////////////////////////////////////////////////////////
 DWORD getVacancySeat(LPCONTEXT pCtx)
 {
-    LPDWORD pDr = &pCtx->Dr0;
-    for (int i = 0; i < HARDWARE_SEAT_COUNT; i++, pDr++)
+    int i = 0;
+    int iFlag = pCtx->Dr7 & 0xff;
+    while (i < HARDWARE_SEAT_COUNT)
     {
-        if (NULL == *pDr)
+        if (!(iFlag & (1 << (2 * i))) && !g_pData->isHardBPExist(i))
         {
             return i;
-        }
+        } 
+        i++;
     }
 
+//     LPDWORD pDr = &pCtx->Dr0;
+//     for (int i = 0; i < HARDWARE_SEAT_COUNT; i++, pDr++)
+//     {
+//         if (NULL == *pDr)
+//         {
+//             return i;
+//         }
+//     }
+
     return -1;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// 取消硬件断点
+//
+//////////////////////////////////////////////////////////////////////////
+BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber)
+{
+    BOOL bRet = FALSE;
+
+    //获取寄存器环境
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+
+    // 将该位设置为 0
+    ctx.Dr7 &= ~(-1 & (1 << (dwSNumber * 2)));
+    ctx.Dr7 &= ~(-1 & (0xf << (dwSNumber * 4 + 16))); // 设置 RW、LEN 位
+    //*(&ctx.Dr0 + dwSNumber) = NULL;    // 如果此位改了，单步的 DR6 会为0。
+    ctx.Dr6 = 0;
+    SetThreadContext(hThread, &ctx);
+
+    bRet = TRUE;
+    return bRet;
 }
 
 //////////////////////////////////////////////////////////////////////////
