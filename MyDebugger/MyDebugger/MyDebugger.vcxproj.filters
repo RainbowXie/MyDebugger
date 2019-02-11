@@ -27,6 +27,12 @@
     <ClInclude Include="Common.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="..\Disasm\Decode2Asm.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Disasm\Disasm.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -42,6 +48,15 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="UserCommand.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Disasm\Decode2Asm.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Disasm\Disasm.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Disasm\Dsasm_Functions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

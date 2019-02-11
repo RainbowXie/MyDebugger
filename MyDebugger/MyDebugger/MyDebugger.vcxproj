@@ -145,11 +145,16 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\Disasm\Decode2Asm.h" />
+    <ClInclude Include="..\Disasm\Disasm.h" />
     <ClInclude Include="Common.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\Disasm\Decode2Asm.cpp" />
+    <ClCompile Include="..\Disasm\Disasm.cpp" />
+    <ClCompile Include="..\Disasm\Dsasm_Functions.cpp" />
     <ClCompile Include="EventFunc.cpp" />
     <ClCompile Include="Events.cpp" />
     <ClCompile Include="MyDebugger.cpp" />
