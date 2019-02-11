@@ -6,7 +6,7 @@
 
 CDebugData *g_pData;
 
-int wmain(int argc, wchar_t** argv)
+int main(int argc, char** argv)
 {
     g_pData = new CDebugData;
 
@@ -33,6 +33,8 @@ int wmain(int argc, wchar_t** argv)
     DEBUG_EVENT de;
     while (WaitForDebugEvent(&de, INFINITE))
     {
+        g_pData->setNewU();
+
         DWORD dwCoutinueStatus = DBG_EXCEPTION_NOT_HANDLED;
 
         switch (de.dwDebugEventCode)

@@ -6,6 +6,7 @@
 #include <queue>
 #include <vector>
 #include <Shlwapi.h>
+#include "..\Disasm\Decode2Asm.h"
 
 #pragma comment(lib, "Shlwapi.lib")
 
@@ -56,12 +57,6 @@ enum eType
     TEMP_BREAKPOINT, //临时断点
 };
 
-enum emSigleStep
-{
-    STEPIN_SINGLESTEP,
-    STEPOVER_SINGLESTEP
-};
-
 //////////////////////////////////////////////////////////////////////////
 //软件断点
 //
@@ -84,6 +79,13 @@ typedef struct tagHardBreakPoint
     DWORD m_dwLen;      // 断点长度
     BOOL m_bCurrentBP; // 是否是当前的断点，用于重设断点
 }HARD_BP, *LPHARD_BP;
+
+typedef struct tagDisassembly
+{
+    unsigned int nCodeAddress;                   // 指令地址
+    unsigned char szOpcodeBuf[0x40];    // 硬编码
+    unsigned char szAsmBuf[0x40];    // 指令
+}DISASSEMBLY, *LPDISASSEMBLY_INSTRUCT;
 
 //////////////////////////////////////////////////////////////////////////
 // DR7 的标志
@@ -355,21 +357,37 @@ public:
         m_bStepIn = TRUE;
     }
 
-    BOOL isStepOver()
+    // 用来判断是否要重置 u 的地址
+    void setNewU()
     {
-        if (TRUE == m_bStepOver )
+        m_bNewUAddr = TRUE;
+        return;
+    }
+
+    BOOL isNewU()
+    {
+        if (m_bNewUAddr == TRUE)
         {
-            m_bStepOver = FALSE;
+            m_bNewUAddr = FALSE;
             return TRUE;
         }
         return FALSE;
     }
-
-    void setStepOver()
+    void setUAddr(DWORD dwUAddr)
     {
-        m_bStepOver = TRUE;
+        m_uAddr = dwUAddr;
     }
+
+    DWORD getUAddr()
+    {
+        return m_uAddr;
+    }
+
+
 private:
+
+    BOOL m_bNewUAddr = TRUE;
+    DWORD m_uAddr = NULL;   // u 命令用的地址
     // 软件断点
     int m_iCount = 0;
     std::map<DWORD, LPSOFT_BP> m_SoftBPMap;     // 地址，软件断点数据
@@ -382,7 +400,6 @@ private:
 
     //单步步入、单步步过
     BOOL m_bStepIn = FALSE;
-    BOOL m_bStepOver = FALSE;
 };
 
 
@@ -404,6 +421,12 @@ BOOL setSoftBP(HANDLE hProcess, eType BPType, DWORD addr);
 DWORD getVacancySeat(LPCONTEXT pCtx);
 DWORD setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType);
 BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber);
+BOOL disassembly(
+    unsigned int* nInstructionCount,
+    std::vector<LPDISASSEMBLY_INSTRUCT> *pVectorAsm,
+    unsigned char *pCode,
+    unsigned int nCodeLength,
+    unsigned int *nCodeAddress);
 
 BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 std::queue<std::string>* getUserInput();
@@ -416,3 +439,5 @@ void doBH(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doT(HANDLE hThread, LPDEBUG_EVENT pDe);
+void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe);
+void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);

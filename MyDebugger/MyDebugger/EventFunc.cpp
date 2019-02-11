@@ -104,7 +104,7 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
     PEXCEPTION_RECORD pExceptionRecord = &pExceptionDebugInfo->ExceptionRecord;
 
     HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pDe->dwThreadId);
-
+    HANDLE hProcess = OpenProcess(THREAD_ALL_ACCESS, FALSE, pDe->dwProcessId);
 
 
     CONTEXT ctx;
@@ -140,17 +140,12 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
             // 设置要还原的硬件断点
             g_pData->setCurrentHardwareBP(*(&ctx.Dr0 + iSNumber));
 
-            // 当单步步过/步入进入硬件断点时，仍然停留在当前指令，
+            // 当单步步入进入硬件断点时，仍然停留在当前指令，
             // 没有走到下一条指令，单步步过没有完成。
             // 直接再走一步，下一条指令中进入单步步过。
-            if (g_pData->isStepIn() || g_pData->isStepOver())
+            if (g_pData->isStepIn())
             {
                 g_pData->setStepIn();
-                return DBG_CONTINUE;
-            }
-            if (g_pData->isStepOver())
-            {
-                g_pData->setStepOver();
                 return DBG_CONTINUE;
             }
         }
@@ -214,9 +209,6 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
         {
             bRet = analyzeInstruction(pDe, getUserInput());
         }
-    }
-    else if (TRUE == g_pData->isStepOver())
-    {
     }
 /*    }*/
 
@@ -387,6 +379,58 @@ BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber)
 }
 
 //////////////////////////////////////////////////////////////////////////
+//nInstructionCount 需要解析几条指令 
+//pCode 需要解析指令缓冲区
+// nCodeLength 解析指令缓冲区的大小
+// pVectorAsm 解析出来的指令
+// nCodeAddress 传入指令的地址，传出解析完后下一条指令的地址
+//////////////////////////////////////////////////////////////////////////
+BOOL disassembly(
+    unsigned int* nInstructionCount, 
+    std::vector<LPDISASSEMBLY_INSTRUCT> *pVectorAsm,
+    unsigned char *pCode, 
+    unsigned int nCodeLength,
+    unsigned int *nCodeAddress)
+{
+    BOOL bRet = TRUE;
+    unsigned int nCount = 0;
+    unsigned int nCodeSize = 0;
+    unsigned int nDisassembledCount = 0;
+    char szAsmBuf[0x40] = { 0 };
+    char szOpcodeBuf[0x40];    // 硬编码
+    
+    while (nCount < nCodeLength && nDisassembledCount < *nInstructionCount)
+    {
+        LPDISASSEMBLY_INSTRUCT pAsm = new DISASSEMBLY;
+
+        Decode2AsmOpcode(
+            pCode, 
+            szAsmBuf,
+            szOpcodeBuf,
+            &nCodeSize, (unsigned int)*nCodeAddress);
+
+        memcpy(pAsm->szOpcodeBuf, szOpcodeBuf, sizeof(szOpcodeBuf));
+        memcpy(pAsm->szAsmBuf, szAsmBuf, sizeof(szAsmBuf));
+        pAsm->nCodeAddress = *nCodeAddress;
+        pVectorAsm->push_back(pAsm);
+
+        pCode += nCodeSize;
+        nCount += nCodeSize;
+        *nCodeAddress += nCodeSize;
+        nDisassembledCount++;
+    }
+
+    // 没有解析到足够的指令
+    if (nDisassembledCount < *nInstructionCount - 1)
+    {
+        bRet = FALSE;
+    }
+
+    *nInstructionCount = nDisassembledCount;
+    return bRet;
+}
+
+//////////////////////////////////////////////////////////////////////////
 //
 //
 //////////////////////////////////////////////////////////////////////////
@@ -408,8 +452,8 @@ void showDebugerError(TCHAR* err)
     // ...
     // Display the string.
     OutputDebugString(err);
-    OutputDebugString(_T("\r\n 错误原因："));
-    OutputDebugString((LPCWSTR)lpMsgBuf);
+    OutputDebugStringA(("\r\n 错误原因："));
+    OutputDebugStringW((LPCWSTR)lpMsgBuf);
     // Free the buffer.
     LocalFree(lpMsgBuf);
 }

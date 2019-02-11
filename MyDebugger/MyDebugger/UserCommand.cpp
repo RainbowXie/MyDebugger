@@ -1,8 +1,6 @@
 #include "stdafx.h"
 #include "Common.h"
 
-
-
 //////////////////////////////////////////////////////////////////////////
 // 获取用户输入
 //
@@ -80,6 +78,16 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
     else if (!qu->front().compare("t"))
     {
         doT(hThread, pDe);
+        bRet = FALSE;
+    }
+    else if (!qu->front().compare("u"))
+    {
+        doU(hProcess, hThread, pDe, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("p"))
+    {
+        doP(hProcess, hThread, pDe);
         bRet = FALSE;
     }
 
@@ -329,5 +337,97 @@ void doT(HANDLE hThread, LPDEBUG_EVENT pDe)
     SetThreadContext(hThread, &ctx);
 
     g_pData->setStepIn();
+    return;
+}
+
+void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+    DWORD dwAddr = 0;
+
+    qu->pop();
+    if (qu->empty())
+    {
+        CONTEXT ctx;
+        ctx.ContextFlags = CONTEXT_ALL;
+        GetThreadContext(hThread, &ctx);
+        dwAddr = ctx.Eip;
+    }
+    else
+    {
+        sscanf(qu->front().c_str(), "%x", &dwAddr);
+        if (NULL == dwAddr)
+        {
+            printf("Syntax error.\n");
+            return;
+        }
+        g_pData->setNewU();
+    }
+
+    // 准备环境
+    std::vector<LPDISASSEMBLY_INSTRUCT> vectorAsm;
+    unsigned char szCodeBuff[0x800] = { 0 };
+    DWORD dwNumberOfBytesRead = 0;
+    DWORD dwNumberOfInsDisasm = 8;
+
+    if (!g_pData->isNewU())
+    {
+        dwAddr = g_pData->getUAddr();
+    }
+
+    ReadProcessMemory(hProcess, (LPVOID)dwAddr, szCodeBuff, sizeof(szCodeBuff), &dwNumberOfBytesRead);
+    disassembly(
+        (unsigned int*)&dwNumberOfInsDisasm, 
+        &vectorAsm, 
+        szCodeBuff, 
+        dwNumberOfBytesRead, 
+        (unsigned int*)&dwAddr);
+
+    std::vector<LPDISASSEMBLY_INSTRUCT>::iterator it = vectorAsm.begin();
+    for (; it != vectorAsm.end(); it++)
+    {
+        printf("%08X %s\t\t\t\t%s\r\n", (*it)->nCodeAddress, (*it)->szOpcodeBuf, (*it)->szAsmBuf);
+        delete (*it);
+    }
+
+    g_pData->setUAddr(dwAddr);
+    return;
+}
+
+void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe)
+{
+    // 判断下一行指令是否有软件断点。如果有，直接运行；如果没有，在下一行的指令设一个软件断点，然后运行进程
+    // 断下来后进入 BreakPointException，直接恢复原来的指令
+    // 如果有硬件断点，不影响原来的流程。
+    // 准备环境
+    std::vector<LPDISASSEMBLY_INSTRUCT> vectorAsm;
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+    DWORD dwAddr = ctx.Eip;
+    unsigned char szCodeBuff[0x80] = { 0 };
+    DWORD dwNumberOfBytesRead = 0;
+    DWORD dwNumberOfInsDisasm = 1;
+
+
+    ReadProcessMemory(hProcess, (LPVOID)dwAddr, szCodeBuff, sizeof(szCodeBuff), &dwNumberOfBytesRead);
+    disassembly(
+        (unsigned int*)&dwNumberOfInsDisasm,
+        &vectorAsm,
+        szCodeBuff,
+        dwNumberOfBytesRead,
+        (unsigned int*)&dwAddr);
+
+    if (strstr((char*)vectorAsm[0]->szAsmBuf, "call"))
+    {
+        if (FALSE == g_pData->isSoftBPExist(dwAddr))
+        {
+            setSoftBP(hProcess, TEMP_BREAKPOINT, dwAddr);
+        }
+    }
+    else
+    {
+        doT(hThread, pDe);
+    }
+
     return;
 }
