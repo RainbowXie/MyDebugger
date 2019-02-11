@@ -104,6 +104,9 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
     PEXCEPTION_RECORD pExceptionRecord = &pExceptionDebugInfo->ExceptionRecord;
 
     HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pDe->dwThreadId);
+
+
+
     CONTEXT ctx;
     ctx.ContextFlags = CONTEXT_ALL;
     GetThreadContext(hThread, &ctx);
@@ -136,11 +139,26 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
 
             // 设置要还原的硬件断点
             g_pData->setCurrentHardwareBP(*(&ctx.Dr0 + iSNumber));
+
+            // 当单步步过/步入进入硬件断点时，仍然停留在当前指令，
+            // 没有走到下一条指令，单步步过没有完成。
+            // 直接再走一步，下一条指令中进入单步步过。
+            if (g_pData->isStepIn() || g_pData->isStepOver())
+            {
+                g_pData->setStepIn();
+                return DBG_CONTINUE;
+            }
+            if (g_pData->isStepOver())
+            {
+                g_pData->setStepOver();
+                return DBG_CONTINUE;
+            }
         }
         else
         {
 
         }
+
         // 断点到达，获取用户输入
         BOOL bRet = TRUE;
         while (bRet)
@@ -153,40 +171,54 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
     }
 
 
-    // 说明是单步中断引发的，而不是硬件断点引发的
-    if (pDr6->BS)
-    {
+    // 走到这说明是单步中断引发的，而不是硬件断点引发的
+//     if (pDr6->BS)
+//     {
         // 找到刚刚走过的断点，并重设断点
-        LPSOFT_BP currentBP = g_pData->getCurrentSoftBP();
+    LPSOFT_BP currentSoftBP = g_pData->getCurrentSoftBP();
+    LPHARD_BP currentHardBP = g_pData->getCurrentHardwareBP();
 
-        // 如果 currentBP 为 NULL，则说明是硬件执行断点。
-        if (currentBP)
+    // 如果 currentBP 不为 NULL，则说明是软件执行断点。
+    if (NULL != currentSoftBP)
+    {
+        HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
+        if (NULL == hProcess)
         {
-            HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
-            if (NULL == hProcess)
-            {
-                showDebugerError(_T("重设断点失败。"));
-                return dwRet;
-            }
-
-            // 将断点重设回去
-            if (!setBreakPoint(hProcess, currentBP->m_bpAddr, &currentBP->m_oldCode))
-            {
-                return dwRet;
-            }
-        }
-        else
-        {
-            // 恢复硬件执行断点
-            DWORD dwAddr = g_pData->getCurrentHardwareBP()->m_bpAddr;
-            if (NULL != dwAddr)
-            {
-                setHardBP(hThread, dwAddr, EXECUTE_HARDWARE_LEN, EXECUTE_HARDWARE);
-            }
+            showDebugerError(_T("重设断点失败。"));
+            return dwRet;
         }
 
-
+        // 将断点重设回去
+        if (!setBreakPoint(hProcess, currentSoftBP->m_bpAddr, &currentSoftBP->m_oldCode))
+        {
+            return dwRet;
+        }
     }
+
+    if (NULL != currentHardBP)
+    {
+        // 恢复硬件执行断点
+        DWORD dwAddr = currentHardBP->m_bpAddr;
+        if (NULL != dwAddr)
+        {
+            setHardBP(hThread, dwAddr, EXECUTE_HARDWARE_LEN, EXECUTE_HARDWARE);
+        }
+    }
+
+    // 判断是否是单步步入
+    if (TRUE == g_pData->isStepIn())
+    {
+        // 等待用户输入
+        BOOL bRet = TRUE;
+        while (bRet)
+        {
+            bRet = analyzeInstruction(pDe, getUserInput());
+        }
+    }
+    else if (TRUE == g_pData->isStepOver())
+    {
+    }
+/*    }*/
 
 
     dwRet = DBG_CONTINUE;

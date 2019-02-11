@@ -8,6 +8,10 @@
 #include <Shlwapi.h>
 
 #pragma comment(lib, "Shlwapi.lib")
+
+// 单线程写是天坑！！！！！！！！！
+
+
 // 软件断点执行流程：
 // 1. 设置软件断点为 00400000
 // 2. 进程遇到断点，ExceptionAddress 为 0040000，dwDebugEventCode = EXCEPTION_DEBUG_EVENT，
@@ -28,6 +32,12 @@
  //硬件访问、写入断点会断在访问、写入指令的下一条指令
 //触发后会进入 EXCEPTION_SINGLE_STEP 异常，然后继续执行进程，不会再来，不需要断步配合来过访问、写入断点
 
+// 单步步入/步过 遇上 CC 断点：
+// 情景：eip = 00400000，此命令原来为 3 个字节，设了一个 CC 断点，此时置单步步入
+// 执行流程：
+// 1. 执行 CC，eip = 00400001，进入 BP 异常。
+// 2. 在 BP 异常中还原 CC，eip 还原为 00400000，置单步
+// 3. 进入单步异常，eip = 00400003，将上一条命令的断点先恢复，然后等待用户输入
 #define EXECUTE_HARDWARE_LEN 1
 #define HARDWARE_SEAT_COUNT 4
 #define  BH_COMMAND_LENGTH 4
@@ -44,6 +54,12 @@ enum eType
     SYS_BREAKPOINT, //系统断点
     NORMAL_BREAKPOINT, //普通断点
     TEMP_BREAKPOINT, //临时断点
+};
+
+enum emSigleStep
+{
+    STEPIN_SINGLESTEP,
+    STEPOVER_SINGLESTEP
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -323,6 +339,36 @@ public:
         }
         return NULL;
     }
+
+    BOOL isStepIn()
+    {
+        if (TRUE == m_bStepIn)
+        {
+            m_bStepIn = FALSE;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    void setStepIn()
+    {
+        m_bStepIn = TRUE;
+    }
+
+    BOOL isStepOver()
+    {
+        if (TRUE == m_bStepOver )
+        {
+            m_bStepOver = FALSE;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    void setStepOver()
+    {
+        m_bStepOver = TRUE;
+    }
 private:
     // 软件断点
     int m_iCount = 0;
@@ -334,6 +380,9 @@ private:
     std::vector<LPHARD_BP> m_HardBPVector;     // 地址，软件断点数据
     std::vector<LPHARD_BP>::iterator m_HardIt;
 
+    //单步步入、单步步过
+    BOOL m_bStepIn = FALSE;
+    BOOL m_bStepOver = FALSE;
 };
 
 
@@ -365,5 +414,5 @@ void doBPL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBPC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBH(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBHC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-
+void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doT(HANDLE hThread, LPDEBUG_EVENT pDe);

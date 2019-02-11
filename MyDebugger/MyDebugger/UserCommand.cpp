@@ -77,6 +77,11 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         doBHC(hThread, pDe, qu);
         bRet = TRUE;
     }
+    else if (!qu->front().compare("t"))
+    {
+        doT(hThread, pDe);
+        bRet = FALSE;
+    }
 
     delete qu;
     return bRet;
@@ -310,5 +315,19 @@ void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
 
     }
     
+    return;
+}
+
+// 置单步步入
+void doT(HANDLE hThread, LPDEBUG_EVENT pDe)
+{
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+
+    ctx.EFlags |= 0x100;
+    SetThreadContext(hThread, &ctx);
+
+    g_pData->setStepIn();
     return;
 }
