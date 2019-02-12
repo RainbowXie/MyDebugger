@@ -90,6 +90,11 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         doP(hProcess, hThread, pDe);
         bRet = FALSE;
     }
+    else if (!qu->front().compare("trace"))
+    {
+        doTRACE(hProcess, hThread, pDe, qu);
+        bRet = FALSE;
+    }
 
     delete qu;
     return bRet;
@@ -360,6 +365,7 @@ void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::str
             printf("Syntax error.\n");
             return;
         }
+        // 重置 u 的地址
         g_pData->setNewU();
     }
 
@@ -385,7 +391,7 @@ void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::str
     std::vector<LPDISASSEMBLY_INSTRUCT>::iterator it = vectorAsm.begin();
     for (; it != vectorAsm.end(); it++)
     {
-        printf("%08X %s\t\t\t\t%s\r\n", (*it)->nCodeAddress, (*it)->szOpcodeBuf, (*it)->szAsmBuf);
+        printf("%08X %-30s%-30s\r\n", (*it)->nCodeAddress, (*it)->szOpcodeBuf, (*it)->szAsmBuf);
         delete (*it);
     }
 
@@ -417,6 +423,7 @@ void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe)
         dwNumberOfBytesRead,
         (unsigned int*)&dwAddr);
 
+    // 没有 call 的时候步入和步过一样 
     if (strstr((char*)vectorAsm[0]->szAsmBuf, "call"))
     {
         if (FALSE == g_pData->isSoftBPExist(dwAddr))
@@ -428,6 +435,40 @@ void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe)
     {
         doT(hThread, pDe);
     }
+
+    return;
+}
+
+void doTRACE(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+    DWORD dwAddr = 0;
+
+    qu->pop();
+    if (qu->empty())
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    sscanf(qu->front().c_str(), "%x", &dwAddr);
+    if (NULL == dwAddr)
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+    
+    printf("Please input file name: ");
+    std::string strName;
+    std::cin >> strName;
+    
+    if (!g_pData->openFile(strName.c_str()))
+    {
+        printf("File path error.\n");
+        return;
+    }
+    
+    g_pData->setTrace();
+    g_pData->traceStepIn(dwAddr, hThread);
 
     return;
 }

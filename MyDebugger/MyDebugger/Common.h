@@ -6,6 +6,7 @@
 #include <queue>
 #include <vector>
 #include <Shlwapi.h>
+#include <fstream>
 #include "..\Disasm\Decode2Asm.h"
 
 #pragma comment(lib, "Shlwapi.lib")
@@ -383,6 +384,66 @@ public:
         return m_uAddr;
     }
 
+    bool openFile(const char* szName)
+    {
+        m_TraceFile = new std::fstream;
+        m_TraceFile->open(szName, std::ios::in | std::ios::out | std::ios::trunc);
+
+        if (m_TraceFile->is_open())
+        {
+            return true;
+        }
+        return false;
+    }
+    void closeFile()
+    {
+        m_TraceFile->close();
+        delete m_TraceFile;
+    }
+    void writeFile(LPDISASSEMBLY_INSTRUCT pAsm)
+    {
+        char* szAddr = new char[sizeof(pAsm->nCodeAddress) * 2 + sizeof(pAsm->szAsmBuf) + sizeof(pAsm->szOpcodeBuf)];
+
+        std::sprintf(szAddr, "%08x %-30s%-30s\r\n", pAsm->nCodeAddress, pAsm->szOpcodeBuf, pAsm->szAsmBuf);
+
+        *m_TraceFile << szAddr;
+        m_TraceFile->flush();
+        delete[] szAddr;
+    }
+
+    void traceStepIn(DWORD dwAddr, HANDLE hThread)
+    {
+        CONTEXT ctx;
+        ctx.ContextFlags = CONTEXT_ALL;
+        GetThreadContext(hThread, &ctx);
+
+        ctx.EFlags |= 0x100;
+        SetThreadContext(hThread, &ctx);
+
+        m_dwTraceAddr = dwAddr;
+    }
+
+    BOOL isTrace()
+    {
+        return m_bTrace;
+    }
+
+    BOOL isTraceOver(DWORD dwAddr)
+    {
+        if (dwAddr == m_dwTraceAddr)
+        {
+            m_dwTraceAddr = 0;
+            m_bTrace = FALSE;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    void setTrace()
+    {
+        
+        m_bTrace = TRUE;
+    }
 
 private:
 
@@ -400,6 +461,11 @@ private:
 
     //单步步入、单步步过
     BOOL m_bStepIn = FALSE;
+
+    // 跟踪步入的地址
+    DWORD m_dwTraceAddr = 0;
+    std::fstream *m_TraceFile = NULL;
+    BOOL m_bTrace = FALSE;
 };
 
 
@@ -441,3 +507,4 @@ void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
 void doT(HANDLE hThread, LPDEBUG_EVENT pDe);
 void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe);
 void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doTRACE(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
