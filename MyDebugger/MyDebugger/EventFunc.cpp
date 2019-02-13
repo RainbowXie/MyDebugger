@@ -237,6 +237,76 @@ BOOL disassembly(
 }
 
 //////////////////////////////////////////////////////////////////////////
+//设置内存断点
+//
+//////////////////////////////////////////////////////////////////////////
+BOOL SetMemoryBreakPoint(HANDLE hProcess, DWORD dwAddrDst, DWORD dwLen, LPDWORD pdwOldProtect)
+{
+    BOOL bRet = FALSE;
+    VirtualProtectEx(hProcess, (LPVOID)dwAddrDst, dwLen, PAGE_NOACCESS, pdwOldProtect);
+
+    bRet = TRUE;
+    return bRet;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// 恢复内存断点
+//
+//////////////////////////////////////////////////////////////////////////
+BOOL abortMemoryBreakPoint(HANDLE hProcess, HANDLE hThread, DWORD dwAddrDst, DWORD dwOldProtect)
+{
+    BOOL bRet = FALSE;
+
+    /*
+    * 断步配合
+    */
+    
+
+    // 恢复原来内存的属性
+    VirtualProtectEx(hProcess, (LPVOID)dwAddrDst, 1, dwOldProtect, &dwOldProtect);
+
+    //设置单步
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+    ctx.EFlags |= 0x100;
+    SetThreadContext(hThread, &ctx);
+
+    bRet = TRUE;
+    return bRet;
+}
+//////////////////////////////////////////////////////////////////////////
+// 读取内存进程
+//
+//////////////////////////////////////////////////////////////////////////
+BOOL readMemory(HANDLE hProcess, DWORD dwCount, char* szBuff, DWORD dwAddrDest)
+{
+    BOOL bRet = TRUE;
+    DWORD dwOldProtect = 0;
+    DWORD dwNumberOfBytesRead = 0;
+    DWORD dwNumberOfBytesWritten = 0;
+    unsigned char cCode = 0xCC;
+
+
+    if (!VirtualProtectEx(hProcess, (LPVOID)dwAddrDest, 1, PAGE_EXECUTE_READWRITE, &dwOldProtect))
+    {
+        return FALSE;
+    }
+
+    if (!ReadProcessMemory(hProcess, (LPVOID)dwAddrDest, szBuff, dwCount, &dwNumberOfBytesRead))
+    {
+        return FALSE;
+    }
+
+    if (!VirtualProtectEx(hProcess, (LPVOID)dwAddrDest, 1, dwOldProtect, &dwOldProtect))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+//////////////////////////////////////////////////////////////////////////
 //
 //
 //////////////////////////////////////////////////////////////////////////
@@ -263,3 +333,4 @@ void showDebugerError(TCHAR* err)
     // Free the buffer.
     LocalFree(lpMsgBuf);
 }
+

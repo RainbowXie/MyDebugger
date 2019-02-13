@@ -40,7 +40,7 @@ DWORD OnExceptionDebugEvent(LPDEBUG_EVENT pDe)
     break;
     case EXCEPTION_ACCESS_VIOLATION:
     {
-        dwRet = OnSingleStep(pDe);
+        dwRet = OnExceptionAccessViolation(pDe);
     }
     break;
     default:
@@ -214,6 +214,15 @@ DWORD OnSingleStep(LPDEBUG_EVENT pDe)
             SetThreadContext(hThread, &ctx);
         }
     }
+
+    if (g_pData->isMemAttributeChange())
+    {
+        //PMEMORY_BP pBP = g_pData->getCurrentBP();
+        DWORD dwAddr = g_pData->getChangedAddr();
+        DWORD dwOldProtect = 0;
+        SetMemoryBreakPoint(hProcess, dwAddr, 1, &dwOldProtect);
+        g_pData->cleanChangedAddr();
+    }
     /*    }*/
 
     dwRet = DBG_CONTINUE;
@@ -286,6 +295,50 @@ DWORD OnBreakPoint(LPDEBUG_EVENT pDe)
         bRet = analyzeInstruction(pDe, getUserInput());
     }
 
+
+    return dwRet;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// 访问异常
+// 无论是不是内存断点，执行完后都要设单步恢复原来的内存属性
+// 流程：恢复发生异常的内存地址的分页属性，保存发生异常的内存地址，设单步，在单步中重设异常的内存地址的分页属性为
+// PAGE_NOACCESS
+//////////////////////////////////////////////////////////////////////////
+DWORD OnExceptionAccessViolation(LPDEBUG_EVENT pDe)
+{
+    DWORD dwRet = DBG_CONTINUE;
+    LPEXCEPTION_DEBUG_INFO pExceptionDebugInfo = &pDe->u.Exception;
+    PEXCEPTION_RECORD pExceptionRecord = &pExceptionDebugInfo->ExceptionRecord;
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pDe->dwProcessId);
+    HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pDe->dwThreadId);
+
+    //判断异常读写的内存地址是否位于断点范围内
+    PMEMORY_BP pBP = g_pData->getMemoryBP(pExceptionRecord->ExceptionInformation[1], pExceptionRecord->ExceptionInformation[0]);
+    if (pBP)
+    {
+        // 内存断点触发
+        pBP->m_bCurrentBP = TRUE;
+        // 恢复内存断点
+        abortMemoryBreakPoint(hProcess, hThread, pBP->m_bpAddr, pBP->m_dwOldProtect);
+        // 等待用户输入
+        BOOL bRet = TRUE;
+        while (bRet)
+        {
+            bRet = analyzeInstruction(pDe, getUserInput());
+        }
+    }
+
+    
+    abortMemoryBreakPoint(
+        hProcess, hThread, 
+        pExceptionRecord->ExceptionInformation[1], 
+        g_pData->getMemoryPage(pExceptionRecord->ExceptionInformation[1]));
+    
+    g_pData->setMemoryAttributeChange(pExceptionRecord->ExceptionInformation[1]);
+
+    CloseHandle(hProcess);
+    CloseHandle(hThread);
 
     return dwRet;
 }

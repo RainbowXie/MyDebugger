@@ -56,6 +56,7 @@ enum eType
     SYS_BREAKPOINT, //系统断点
     NORMAL_BREAKPOINT, //普通断点
     TEMP_BREAKPOINT, //临时断点
+
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -80,6 +81,22 @@ typedef struct tagHardBreakPoint
     DWORD m_dwLen;      // 断点长度
     BOOL m_bCurrentBP; // 是否是当前的断点，用于重设断点
 }HARD_BP, *LPHARD_BP;
+
+typedef struct tagMemoryBreakPoint
+{
+    int m_nSequenceNumber;     // 序号
+    int m_type;                   // 断点类型
+    DWORD m_bpAddr;     // 断点地址
+    BOOL m_bCurrentBP; // 是否是当前的断点，用于重设断点
+    DWORD m_dwOldProtect;  //原来的内存属性
+}MEMORY_BP, *PMEMORY_BP;
+typedef struct tagMemBPShow
+{
+    int m_nSequenceNumber;
+    int m_nLen;
+    DWORD m_bpAddr;
+    int m_type;
+}MEM_BP_SHOW, *PMEM_BP_SHOW;
 
 typedef struct tagDisassembly
 {
@@ -124,6 +141,56 @@ typedef struct tagDR6
     int unused1 : 17;
 }DR6, *PDR6;
 
+
+DWORD OnCreateProcessDebugEvent(LPDEBUG_EVENT pDe);
+DWORD OnExceptionDebugEvent(LPDEBUG_EVENT pDe);
+DWORD OnBreakPoint(LPDEBUG_EVENT pDe);
+DWORD OnSingleStep(LPDEBUG_EVENT pDe);
+DWORD OnExceptionAccessViolation(LPDEBUG_EVENT pDe);
+
+BOOL restoreInstruction(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode);
+
+void showDebugerError(TCHAR* err);
+BOOL setBreakPoint(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode);
+BOOL setSoftBP(HANDLE hProcess, eType BPType, DWORD addr);
+
+DWORD getVacancySeat(LPCONTEXT pCtx);
+DWORD setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType);
+BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber);
+BOOL disassembly(
+    unsigned int* nInstructionCount,
+    std::vector<LPDISASSEMBLY_INSTRUCT> *pVectorAsm,
+    unsigned char *pCode,
+    unsigned int nCodeLength,
+    unsigned int *nCodeAddress);
+
+BOOL SetMemoryBreakPoint(HANDLE hProcess, DWORD dwAddrDst, DWORD dwLen, LPDWORD pdwOldProtect);
+BOOL abortMemoryBreakPoint(HANDLE hProcess, HANDLE hThread, DWORD dwAddrDst, DWORD dwOldProtect);
+BOOL readMemory(HANDLE hProcess, DWORD dwCount, char* szBuff, DWORD dwAddrDest);
+
+
+BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+std::queue<std::string>* getUserInput();
+
+void doG(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBP(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBPL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBPC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBH(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doT(HANDLE hThread, LPDEBUG_EVENT pDe);
+void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe);
+void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doTRACE(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBM(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBMC(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
+void doBML();
+void doR(HANDLE hThread);
+void doDD(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu);
+void doQ(HANDLE hProcess, HANDLE hThread);
+void doLS();
+void doES();
 //////////////////////////////////////////////////////////////////////////
 //保存所有用得到的数据
 //
@@ -384,6 +451,32 @@ public:
         return m_uAddr;
     }
 
+    // 用来判断是否要重置 u 的地址
+    void setNewDD()
+    {
+        m_bNewDDAddr = TRUE;
+        return;
+    }
+
+    BOOL isNewDD()
+    {
+        if (m_bNewDDAddr == TRUE)
+        {
+            m_bNewDDAddr = FALSE;
+            return TRUE;
+        }
+        return FALSE;
+    }
+    void setDDAddr(DWORD dwDDAddr)
+    {
+        m_DDAddr = dwDDAddr;
+    }
+
+    DWORD getDDAddr()
+    {
+        return m_DDAddr;
+    }
+
     bool openFile(const char* szName)
     {
         m_TraceFile = new std::fstream;
@@ -445,6 +538,311 @@ public:
         m_bTrace = TRUE;
     }
 
+    //////////////////////////////////////////////////////////////////////////
+    // 内存断点
+
+    // 断点存在返回 TRUE，不存在返回 FALSE
+    BOOL isMemoryBPExist(DWORD addr, DWORD dwLen, int BPType)
+    {
+        std::vector<PMEMORY_BP>::iterator Iter;
+        for (Iter = m_MemoryBPVector.begin(); Iter != m_MemoryBPVector.end(); Iter++)
+        {
+            if ((*Iter)->m_bpAddr >= addr 
+                && (*Iter)->m_bpAddr < addr + dwLen
+                && (*Iter)->m_type == BPType)
+            {
+                return TRUE;
+            }
+//             // 三种情况需要扩充
+//             // 第一种：
+//             //   |_______|
+//             //      |________|
+//             if ((*Iter)->m_bpAddr <= addr 
+//                 && addr <= ((*Iter)->m_bpAddr + (*Iter)->m_dwLen) 
+//                 && ((*Iter)->m_bpAddr + (*Iter)->m_dwLen) < addr + dwLen)
+//             {
+// 
+//             }
+//             // 第二种：
+//             //   |_______|
+//             //|______|
+//             else if (addr < (*Iter)->m_bpAddr 
+//                 && (addr + dwLen) <= (*Iter)->m_bpAddr + (*Iter)->m_dwLen)
+//             {
+//             }
+//             // 第三种：
+//             //   |_______|
+//             //|____________|
+//             else if (addr <= (*Iter)->m_bpAddr)
+//             {
+//             }
+        }
+
+        return FALSE;
+    }
+
+    void SetMemoryBP(DWORD dwAddr, DWORD dwLen, DWORD type, DWORD dwOldProtect)
+    {
+        PMEMORY_BP pBP = NULL;
+
+        for (unsigned int i = 0; i < dwLen; i++)
+        {
+            pBP = new MEMORY_BP;
+
+
+            pBP->m_bCurrentBP = FALSE;
+            pBP->m_bpAddr = dwAddr;
+            pBP->m_dwOldProtect = dwOldProtect;
+            pBP->m_type = type;
+            pBP->m_nSequenceNumber = m_iMemBPCount;
+
+            m_MemoryBPVector.push_back(pBP);
+
+            dwAddr++;
+        }
+        m_iMemBPCount++;
+    }
+
+    PMEMORY_BP getMemoryBP(DWORD dwAddr, DWORD type)
+    {
+        std::vector<PMEMORY_BP>::iterator Iter;
+        int nType = 0;
+
+        if (0 == type && 8 == type)
+        {
+            nType = PAGE_NOACCESS;
+        }
+        else if(1 == type)
+        {
+            nType = PAGE_READONLY;
+        }
+        else
+        {
+            return NULL;
+        }
+
+        for (Iter = m_MemoryBPVector.begin(); Iter != m_MemoryBPVector.end(); Iter++)
+        {
+            if (dwAddr == (*Iter)->m_bpAddr)
+            {
+                //如果断点为访问断点，则直接返回断点；
+                //如果断点为写入断点，则判断异常是否为 PAGE_READONLY
+                if (PAGE_NOACCESS == (*Iter)->m_type)
+                {
+                    return (*Iter);
+                }
+                else if(PAGE_READONLY == (*Iter)->m_type && PAGE_READONLY == nType)
+                {
+                    return (*Iter);
+                }
+            }
+        }
+
+        return NULL;
+    }
+
+    BOOL isMemAttributeChange()
+    {
+        if (TRUE == m_bIsMemAttributeChange)
+        {
+            m_bIsMemAttributeChange = FALSE;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    PMEMORY_BP getCurrentBP()
+    {
+        std::vector<PMEMORY_BP>::iterator Iter;
+        for (Iter = m_MemoryBPVector.begin(); Iter != m_MemoryBPVector.end(); Iter++)
+        {
+            if (TRUE == (*Iter)->m_bCurrentBP)
+            {
+                (*Iter)->m_bCurrentBP = FALSE;
+                return (*Iter);
+            }
+        }
+
+        return NULL;
+    }
+
+    DWORD getMemoryPage(DWORD dwAddr)
+    {
+        unsigned int iInteger = dwAddr / 0x1000 * 0x1000;
+        
+        std::vector<PMEMORY_BP>::iterator Iter;
+        for (Iter = m_MemoryBPVector.begin(); Iter != m_MemoryBPVector.end(); Iter++)
+        {
+            if (iInteger <= (*Iter)->m_bpAddr && iInteger + 0x1000 > (*Iter)->m_bpAddr)
+            {
+                
+                return (*Iter)->m_dwOldProtect;
+            }
+        }
+
+        return PAGE_EXECUTE_READWRITE;
+    }
+
+    void setMemoryAttributeChange(DWORD dwAddr)
+    {
+        m_bIsMemAttributeChange = TRUE;
+        m_dwChangedAddr = dwAddr;
+    }
+    // 获取待重设内存属性的地址
+    DWORD getChangedAddr()
+    {
+        return m_dwChangedAddr;
+    }
+    void cleanChangedAddr()
+    {
+        m_dwChangedAddr = NULL;
+    }
+
+    // 从列表中删除该内存断点，并遍历列表，检查是否有同一分页的其他内存断点，
+    // 如果有就保留该页内存属性，如果没有就恢复该页内存属性
+    void deleteMemoryAddr(HANDLE hProcess, HANDLE hThread, DWORD dwSNumber)
+    {
+        std::vector<PMEMORY_BP>::iterator Iter;
+        std::vector<PMEMORY_BP>::iterator ItFirst;
+        std::vector<PMEMORY_BP>::iterator ItLast;
+        bool bhasOtherBP = false;
+        bool bIsFirst = true;
+
+        for (Iter = m_MemoryBPVector.begin(); Iter != m_MemoryBPVector.end(); Iter++)
+        {
+            if (dwSNumber == (*Iter)->m_nSequenceNumber)
+            {
+                if (bIsFirst)
+                {
+                    ItFirst = Iter;
+                    bIsFirst = false;
+                }
+                ItLast = Iter;
+                // 检查是否有同一分页的其他内存断点
+                DWORD dwPageAttribute = (*Iter)->m_bpAddr / 0x1000 * 0x1000;
+
+                std::vector<PMEMORY_BP>::iterator It;
+                for (It = m_MemoryBPVector.begin(); It != m_MemoryBPVector.end(); It++)
+                {
+                    if ((*It)->m_bpAddr >= dwPageAttribute && (*It)->m_bpAddr < dwPageAttribute + 0x1000
+                        && (*It)->m_nSequenceNumber != dwSNumber)
+                    {
+                        bhasOtherBP = true;
+                        break;
+                    }
+                }
+
+                // 如果没有就恢复该页内存属性
+                if (!bhasOtherBP)
+                {
+                    abortMemoryBreakPoint(hProcess, hThread, (*Iter)->m_bpAddr, (*Iter)->m_dwOldProtect);
+                }
+                delete *Iter;
+            }
+        }
+        //
+        //ItFirst;
+        ItLast++;
+        m_MemoryBPVector.erase(ItFirst, ItLast);
+        return;
+    }
+
+    MEM_BP_SHOW getFirstMemoryBP()
+    {
+        MEM_BP_SHOW BpShow = { 0 };
+
+
+        m_MemoryIter = m_MemoryBPVector.begin();
+        if (m_MemoryIter == m_MemoryBPVector.end())
+        {
+            return BpShow;
+        }
+
+
+        DWORD dwSNumber = 0;
+        DWORD dwLen = 0;
+
+        BpShow.m_bpAddr = (*m_MemoryIter)->m_bpAddr;
+        BpShow.m_type = (*m_MemoryIter)->m_type;
+
+        for (dwSNumber = (*m_MemoryIter)->m_nSequenceNumber; 
+            m_MemoryIter != m_MemoryBPVector.end() && dwSNumber == (*m_MemoryIter)->m_nSequenceNumber;
+            m_MemoryIter++, dwLen++)
+        {
+
+            BpShow.m_nSequenceNumber = dwSNumber;
+        }
+
+
+        BpShow.m_nLen = dwLen;
+
+        return BpShow;
+    }
+    MEM_BP_SHOW getNextMemoryBP()
+    {
+        MEM_BP_SHOW BpShow = { 0 };
+        if (m_MemoryIter == m_MemoryBPVector.end())
+        {
+            return BpShow;
+        }
+        DWORD dwSNumber = 0;
+        DWORD dwLen = 0;
+
+        BpShow.m_bpAddr = (*m_MemoryIter)->m_bpAddr;
+        BpShow.m_type = (*m_MemoryIter)->m_type;
+
+        for (dwSNumber = (*m_MemoryIter)->m_nSequenceNumber;
+            m_MemoryIter != m_MemoryBPVector.end() && dwSNumber == (*m_MemoryIter)->m_nSequenceNumber;
+            m_MemoryIter++, dwLen++)
+        {
+            BpShow.m_nSequenceNumber = dwSNumber;
+        }
+        BpShow.m_nLen = dwLen;
+
+        return BpShow;
+    }
+
+    BOOL hasLoadScriptVector()
+    {
+        if (m_LoadScriptVector.empty())
+        {
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    void addScript(std::string* strBuf)
+    {
+
+        m_ExportScriptVector.insert(m_ExportScriptVector.end(), *strBuf);
+    }
+    void exportScript(std::fstream *pScriptFile)
+    {
+        std::vector<std::string>::iterator It;
+        for (It = m_ExportScriptVector.begin(); It != m_ExportScriptVector.end() - 1; It++)
+        {
+            *pScriptFile << *It;
+            *pScriptFile << "\n";
+            pScriptFile->flush();
+        }
+        m_ExportScriptVector.clear();
+    }
+
+    void importScript(std::fstream *pScriptFile)
+    {
+        std::string str;
+        while (!pScriptFile->eof())
+        {
+            getline(*pScriptFile, str, '\n');
+            m_LoadScriptVector.insert(m_LoadScriptVector.end(), str);
+        }
+    }
+    std::string getLoadScript()
+    {
+        std::string str = m_LoadScriptVector.front();
+        m_LoadScriptVector.erase(m_LoadScriptVector.begin());
+        return str;
+    }
 private:
 
     BOOL m_bNewUAddr = TRUE;
@@ -466,45 +864,27 @@ private:
     DWORD m_dwTraceAddr = 0;
     std::fstream *m_TraceFile = NULL;
     BOOL m_bTrace = FALSE;
+
+    // 内存断点
+    int m_iMemBPCount = 0;
+    std::vector<PMEMORY_BP> m_MemoryBPVector;     // 内存断点数据
+    std::vector<PMEM_BP_SHOW> m_MemBPShowVector;    // 用来显示的断点
+    std::vector<PMEMORY_BP>::iterator m_MemoryIter;
+    BOOL m_bIsMemAttributeChange = FALSE;
+    DWORD m_dwChangedAddr = 0;         // 保存待重设的内存地址
+
+    // DD
+    BOOL m_bNewDDAddr = TRUE;
+    DWORD m_DDAddr = NULL;   // u 命令用的地址
+
+    // ES
+    std::vector<std::string> m_ExportScriptVector;
+
+    // LS
+    std::vector<std::string> m_LoadScriptVector;
 };
 
 
 
 // 保存数据
 extern CDebugData* g_pData;
-
-DWORD OnCreateProcessDebugEvent(LPDEBUG_EVENT pDe);
-DWORD OnExceptionDebugEvent(LPDEBUG_EVENT pDe);
-DWORD OnBreakPoint(LPDEBUG_EVENT pDe);
-DWORD OnSingleStep(LPDEBUG_EVENT pDe);
-
-BOOL restoreInstruction(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode);
-
-void showDebugerError(TCHAR* err);
-BOOL setBreakPoint(HANDLE hProcess, DWORD dwAddrDest, char* pBuffOfOldCode);
-BOOL setSoftBP(HANDLE hProcess, eType BPType, DWORD addr);
-
-DWORD getVacancySeat(LPCONTEXT pCtx);
-DWORD setHardBP(HANDLE hThread, DWORD dwAddr, DWORD dwLen, eType BPType);
-BOOL abortHardBP(HANDLE hThread, DWORD dwSNumber);
-BOOL disassembly(
-    unsigned int* nInstructionCount,
-    std::vector<LPDISASSEMBLY_INSTRUCT> *pVectorAsm,
-    unsigned char *pCode,
-    unsigned int nCodeLength,
-    unsigned int *nCodeAddress);
-
-BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-std::queue<std::string>* getUserInput();
-
-void doG(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBP(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBPL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBPC(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBH(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBHL(HANDLE hProcess, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doBHC(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doT(HANDLE hThread, LPDEBUG_EVENT pDe);
-void doP(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe);
-void doU(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);
-void doTRACE(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu);

@@ -34,6 +34,7 @@ int main(int argc, char** argv)
     while (WaitForDebugEvent(&de, INFINITE))
     {
         g_pData->setNewU();
+        g_pData->setNewDD();
 
         DWORD dwCoutinueStatus = DBG_EXCEPTION_NOT_HANDLED;
 

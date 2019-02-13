@@ -11,8 +11,18 @@ std::queue<std::string>* getUserInput()
     std::string::size_type n;
     std::queue<std::string>* qu = new std::queue<std::string>;
 
-    std::cout << "-";
-    std::getline(std::cin, strInput, '\n');
+
+    if (g_pData->hasLoadScriptVector())
+    {
+        strInput = g_pData->getLoadScript();
+    }
+    else
+    {
+        std::cout << "-";
+        std::getline(std::cin, strInput, '\n');
+    }
+    // 插入 ES
+    g_pData->addScript(&strInput);
 
     n = strInput.find(" ");
     while (std::string::npos != n)
@@ -95,7 +105,46 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         doTRACE(hProcess, hThread, pDe, qu);
         bRet = FALSE;
     }
-
+    else if (!qu->front().compare("bm"))
+    {
+        doBM(hProcess, pDe, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("bmc"))
+    {
+        doBMC(hProcess, hThread, pDe, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("bml"))
+    {
+        doBML();
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("r"))
+    {
+        doR(hThread);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("dd"))
+    {
+        doDD(hProcess, hThread, qu);
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("ls"))
+    {
+        doLS();
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("es"))
+    {
+        doES();
+        bRet = TRUE;
+    }
+    else if (!qu->front().compare("q"))
+    {
+        doQ(hProcess, hThread);
+        bRet = TRUE;
+    }
     delete qu;
     return bRet;
 }
@@ -471,4 +520,228 @@ void doTRACE(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std:
     g_pData->traceStepIn(dwAddr, hThread);
 
     return;
+}
+
+void doBM(HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+    DWORD dwAddr = NULL;
+    int dwBPType;
+    DWORD dwLen = 0;
+    if (BH_COMMAND_LENGTH != qu->size())
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    // 硬件断点地址
+    qu->pop();
+    sscanf(qu->front().c_str(), "%x", &dwAddr);
+    if (NULL == dwAddr)
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    // 硬件断点长度
+    qu->pop();
+    sscanf(qu->front().c_str(), "%x", &dwLen);
+    if (0 == dwLen)
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    // 硬件断点类型
+    qu->pop();
+    if (!qu->front().compare("a"))
+    {
+        dwBPType = PAGE_NOACCESS;
+    }
+    else if (!qu->front().compare("w"))
+    {
+        dwBPType = PAGE_READONLY;
+    }
+    else
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    if (g_pData->isMemoryBPExist(dwAddr, dwLen, dwBPType))
+    {
+        return;
+    }
+
+    DWORD dwOldProtect = 0;
+    SetMemoryBreakPoint(hThread, dwAddr, dwLen, &dwOldProtect);
+    g_pData->SetMemoryBP(dwAddr, dwLen, dwBPType, dwOldProtect);
+
+}
+
+void doBMC(HANDLE hProcess, HANDLE hThread, LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
+{
+
+    DWORD dwSNumber = 0;
+    qu->pop();
+    if (qu->empty())
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+    sscanf(qu->front().c_str(), "%d", &dwSNumber);
+
+    g_pData->deleteMemoryAddr(hProcess, hThread, dwSNumber);
+}
+
+void doBML()
+{
+    MEM_BP_SHOW bp = g_pData->getFirstMemoryBP();
+
+    while (bp.m_nLen != 0)
+    {
+        char cType = { 0 };
+        switch (bp.m_type)
+        {
+        case PAGE_READONLY:
+        {
+            cType = 'w';
+        }
+        break;
+        case PAGE_NOACCESS:
+        {
+            cType = 'a';
+        }
+        break;
+        default:
+            break;
+        }
+        printf("Sequence number: %d, Address: %08x, Length: %d, Type: %c\r\n",
+            bp.m_nSequenceNumber,
+            bp.m_bpAddr,
+            bp.m_nLen,
+            cType);
+        
+        MEM_BP_SHOW bptmp = g_pData->getNextMemoryBP();
+        memcpy(&bp, &bptmp, sizeof(bp));
+    }
+}
+
+void doR(HANDLE hThread)
+{
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_ALL;
+    GetThreadContext(hThread, &ctx);
+    printf(
+        "EAX = %08X  ECX = %08X  EDX = %08X  EBX = %08X  ESI = %08X\r\n",
+        ctx.Eax, ctx.Ecx, ctx.Edx, ctx.Ebx, ctx.Esi);
+    printf(
+        "EDI = %08X  ESP = %08X  EBP = %08X  FS = %08X\r\n",
+        ctx.Edi, ctx.Esp, ctx.Ebp, ctx.SegFs);
+    printf(
+        "CS = %08X  DS = %08X  ES = %08X  SS = %08X  EIP = %08X\r\n",
+        ctx.SegCs, ctx.SegDs, ctx.SegEs, ctx.SegSs, ctx.Eip);
+    printf(
+        "CF:%d PF:%d AF:%d ZF:%d SF:%d TF:%d IF:%d DF:%d OF:%d\r\n",
+        ctx.EFlags & 0x1 ? 1 : 0,
+        ctx.EFlags & 0x4 ? 1 : 0,
+        ctx.EFlags & 0x10 ? 1 : 0,
+        ctx.EFlags & 0x40 ? 1 : 0,
+        ctx.EFlags & 0x80 ? 1 : 0,
+        ctx.EFlags & 0x100 ? 1 : 0,
+        ctx.EFlags & 0x200 ? 1 : 0,
+        ctx.EFlags & 0x400 ? 1 : 0,
+        ctx.EFlags & 0x800 ? 1 : 0);
+}
+
+void doDD(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu)
+{
+    // 断点地址
+    DWORD dwAddr = 0;
+    qu->pop();
+    if (qu->empty())
+    {
+        CONTEXT ctx;
+        ctx.ContextFlags = CONTEXT_ALL;
+        GetThreadContext(hThread, &ctx);
+        dwAddr = ctx.Eip;
+    }
+    else
+    {
+        sscanf(qu->front().c_str(), "%x", &dwAddr);
+        if (NULL == dwAddr)
+        {
+            printf("Syntax error.\n");
+            return;
+        }
+        // 重置 u 的地址
+        g_pData->setNewDD();
+    }
+
+    if (!g_pData->isNewDD())
+    {
+        dwAddr = g_pData->getDDAddr();
+    }
+
+    unsigned char szBuf[0x80] = { 0 };
+    readMemory(hProcess, 0x80, (char*)szBuf, dwAddr);
+
+    for (int i = 0; i < 0x80 / 0x10; i++)
+    {
+        dwAddr += 0x10;
+        printf("%08X  ", dwAddr);
+        for (int j = 0; j < 0x10; j++)
+        {
+            printf("%02X ", szBuf[j + i * 0x10]);
+        }
+        for (int j = 0; j < 0x10; j++)
+        {
+            printf("%c", szBuf[j + i * 0x10]);
+        }
+        printf("\r\n");
+    }
+    g_pData->setDDAddr(dwAddr);
+}
+
+
+void doQ(HANDLE hProcess, HANDLE hThread)
+{
+    TerminateProcess(hProcess, 0);
+    ExitProcess(0);
+        
+    return;
+}
+
+void doES()
+{
+    printf("Please input file name: ");
+    std::string strName;
+    std::cin >> strName;
+    std::fstream ScriptFile;
+    ScriptFile.open(strName, std::ios::in | std::ios::out | std::ios::trunc);
+
+    if (!ScriptFile.is_open())
+    {
+        printf("Open file error.\n");
+        return;
+    }
+
+    g_pData->exportScript(&ScriptFile);
+    ScriptFile.close();
+}
+void doLS()
+{
+    printf("Please input file name: ");
+    std::string strName;
+    std::cin >> strName;
+    std::fstream ScriptFile;
+    ScriptFile.open(strName, std::ios::in);
+
+    if (!ScriptFile.is_open())
+    {
+        printf("Open file error.\n");
+        return;
+    }
+
+    g_pData->importScript(&ScriptFile);
+    ScriptFile.close();
 }
