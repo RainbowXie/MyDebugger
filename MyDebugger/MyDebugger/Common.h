@@ -191,6 +191,7 @@ void doDD(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu);
 void doQ(HANDLE hProcess, HANDLE hThread);
 void doLS();
 void doES();
+void doE(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu);
 //////////////////////////////////////////////////////////////////////////
 //保存所有用得到的数据
 //

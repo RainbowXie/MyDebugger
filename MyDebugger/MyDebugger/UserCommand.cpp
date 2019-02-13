@@ -145,6 +145,11 @@ BOOL analyzeInstruction(LPDEBUG_EVENT pDe, std::queue<std::string>* qu)
         doQ(hProcess, hThread);
         bRet = TRUE;
     }
+    else if (!qu->front().compare("e"))
+    {
+        doE(hProcess, hThread, qu);
+        bRet = TRUE;
+    }
     delete qu;
     return bRet;
 }
@@ -687,8 +692,8 @@ void doDD(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu)
 
     for (int i = 0; i < 0x80 / 0x10; i++)
     {
-        dwAddr += 0x10;
         printf("%08X  ", dwAddr);
+        dwAddr += 0x10;
         for (int j = 0; j < 0x10; j++)
         {
             printf("%02X ", szBuf[j + i * 0x10]);
@@ -744,4 +749,58 @@ void doLS()
 
     g_pData->importScript(&ScriptFile);
     ScriptFile.close();
+}
+
+void doE(HANDLE hProcess, HANDLE hThread, std::queue<std::string>* qu)
+{
+    DWORD dwAddr = 0;
+    qu->pop();
+    if (qu->empty())
+    {
+        printf("Syntax error.\n");
+        return;
+    }
+
+    sscanf(qu->front().c_str(), "%x", &dwAddr);
+
+    std::string strBuf;
+
+    do
+    {
+        DWORD dwOldProtect = 0;
+        DWORD dwNumberOfBytesRead = 0;
+        DWORD dwNumberOfBytesWritten = 0;
+        char cChangedBuf = { 0 };
+
+        std::getline(std::cin, strBuf);
+        if (strBuf.empty())
+        {
+            break;
+        }
+        if (3 <= strBuf.length())
+        {
+            std::cout << "Overflow error" << std::endl;
+            continue;
+        }
+        sscanf(strBuf.c_str(), "%hhx", &cChangedBuf);
+
+        if (!VirtualProtectEx(hProcess, (LPVOID)dwAddr, 1, PAGE_EXECUTE_READWRITE, &dwOldProtect))
+        {
+            continue;
+        }
+
+        if (!WriteProcessMemory(hProcess, (LPVOID)dwAddr, &cChangedBuf, sizeof(cChangedBuf), &dwNumberOfBytesWritten))
+        {
+            return;
+        }
+        if (!VirtualProtectEx(hProcess, (LPVOID)dwAddr, 1, dwOldProtect, &dwOldProtect))
+        {
+
+            return;
+        }
+
+        dwAddr++;
+    } while (true);
+
+    return;
 }
